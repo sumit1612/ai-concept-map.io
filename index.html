@@ -150,6 +150,40 @@
   .pill.unknown { background: rgba(248,113,113,.12); color: #f87171; border-color: rgba(248,113,113,.25); }
   .pill.unknown .pill-dot { background: #f87171; }
 
+  /* ── Prompt Selection Checkboxes ── */
+  .prompt-cb {
+    width: 14px; height: 14px; border-radius: 3px;
+    border: 1.5px solid var(--border2); background: var(--surface2);
+    cursor: pointer; appearance: none; -webkit-appearance: none;
+    flex-shrink: 0; position: relative; transition: all .15s;
+    vertical-align: middle;
+  }
+  .prompt-cb:hover { border-color: var(--accent); }
+  .prompt-cb:checked {
+    background: var(--accent); border-color: var(--accent);
+  }
+  .prompt-cb:checked::after {
+    content: '✓'; position: absolute; top: -1px; left: 1.5px;
+    font-size: 10px; color: #fff; font-weight: 700;
+  }
+  .prompt-cb.layer-cb {
+    width: 16px; height: 16px;
+  }
+  .prompt-cb.layer-cb:checked::after {
+    top: 0; left: 2px;
+  }
+  .prompt-cb-indeterminate {
+    background: var(--accent); border-color: var(--accent); opacity: .6;
+  }
+  .prompt-cb-indeterminate::after {
+    content: '–'; position: absolute; top: -2px; left: 2.5px;
+    font-size: 12px; color: #fff; font-weight: 700;
+  }
+  .prompt-select-hint {
+    font-size: 10px; color: var(--muted); padding: 4px 16px 8px;
+    opacity: .7; font-style: italic;
+  }
+
   /* ── Canvas ── */
   #canvas-wrap { flex: 1; position: relative; overflow: hidden; background: var(--bg2); }
   canvas#canvas { display: block; width: 100%; height: 100%; }
@@ -271,6 +305,13 @@
         <button class="action-btn" onclick="centerView()">Fit View</button>
         <button class="action-btn" onclick="clearFocus()">Unfocus</button>
       </div>
+      <h2>Prompt Selection</h2>
+      <div class="actions-row">
+        <button class="action-btn" onclick="promptSelectAll()">Select All</button>
+        <button class="action-btn" onclick="promptSelectNone()">Select None</button>
+        <button class="action-btn" onclick="promptSelectFuzzyUnknown()">Fuzzy+Unknown</button>
+      </div>
+      <div class="prompt-select-hint">Use checkboxes below to pick concepts for the prompt</div>
     </div>
     <div id="node-list"></div>
   </div>
@@ -466,6 +507,7 @@ const state = {
   searchQuery:'',
   layerFilters: new Set(LAYERS.map(l=>l.id)),
   collapsedLayers: new Set(),
+  promptSelected: new Set(ND.map(n => n.id)),
   isPanning:false, panStart:{x:0,y:0},
   layoutMode:'horizontal', sizeMode:'M',
 };
@@ -820,8 +862,18 @@ function renderNodeList(){
     const g=document.createElement('div');g.className='layer-group';
     const col=state.collapsedLayers.has(layer.id);
     const h=document.createElement('div');h.className='layer-group-header';
-    h.innerHTML=`<span class="arrow ${col?'collapsed':''}">▼</span><span class="layer-name" style="color:${layer.color}">${layer.label}</span><span class="layer-badge">${ns.length}</span>`;
-    h.onclick=()=>{if(state.collapsedLayers.has(layer.id))state.collapsedLayers.delete(layer.id);else state.collapsedLayers.add(layer.id);renderNodeList();};
+    const selCount=ns.filter(n=>state.promptSelected.has(n.id)).length;
+    const allSel=selCount===ns.length, noneSel=selCount===0;
+    const cbClass=!allSel&&!noneSel?'prompt-cb layer-cb prompt-cb-indeterminate':'prompt-cb layer-cb';
+    h.innerHTML=`<input type="checkbox" class="${cbClass}" ${allSel?'checked':''} title="Toggle all in ${layer.label} for prompt"><span class="arrow ${col?'collapsed':''}">▼</span><span class="layer-name" style="color:${layer.color}">${layer.label}</span><span class="layer-badge">${selCount}/${ns.length}</span>`;
+    const lcb=h.querySelector('.prompt-cb');
+    lcb.onclick=e=>{
+      e.stopPropagation();
+      const check=!allSel;
+      ns.forEach(n=>{if(check)state.promptSelected.add(n.id);else state.promptSelected.delete(n.id);});
+      renderNodeList();updatePrompt();
+    };
+    h.onclick=(e)=>{if(e.target.classList.contains('prompt-cb'))return;if(state.collapsedLayers.has(layer.id))state.collapsedLayers.delete(layer.id);else state.collapsedLayers.add(layer.id);renderNodeList();};
     g.appendChild(h);
     const body=document.createElement('div');body.className='layer-group-body'+(col?' collapsed':'');
     if(!col)body.style.maxHeight=(ns.length*38+10)+'px';
@@ -830,7 +882,9 @@ function renderNodeList(){
       const it=document.createElement('div');
       it.className='node-item'+(state.selected?.id===n.id?' selected':'')+(!inf&&state.focusNode?' dimmed':'');
       const pl=n.knowledge==='know'?'Know':n.knowledge==='fuzzy'?'Fuzzy':'???';
-      it.innerHTML=`<span class="node-label">${n.label.replace(/\n/g,' ')}</span><span class="pill ${n.knowledge}" title="Click to cycle"><span class="pill-dot"></span>${pl}</span>`;
+      const nSel=state.promptSelected.has(n.id);
+      it.innerHTML=`<input type="checkbox" class="prompt-cb" ${nSel?'checked':''} title="Include in prompt"><span class="node-label">${n.label.replace(/\n/g,' ')}</span><span class="pill ${n.knowledge}" title="Click to cycle"><span class="pill-dot"></span>${pl}</span>`;
+      it.querySelector('.prompt-cb').onclick=e=>{e.stopPropagation();if(state.promptSelected.has(n.id))state.promptSelected.delete(n.id);else state.promptSelected.add(n.id);renderNodeList();updatePrompt();};
       it.querySelector('.pill').onclick=e=>{e.stopPropagation();cycleKnowledge(n);};
       it.onclick=()=>{state.selected=n;setFocus(n);const s=toS(n.x,n.y);state.pan.x+=W/2-s.x;state.pan.y+=H/2-s.y;draw();renderNodeList();updatePrompt();drawMinimap();};
       body.appendChild(it);
@@ -888,14 +942,25 @@ function centerView(){
 // PROMPT
 // ══════════════════════════════════════════════════════════════════════
 function updatePrompt(){
-  const kn=state.nodes.filter(n=>n.visible&&n.knowledge==='know').map(n=>n.label.replace(/\n/g,' '));
-  const fz=state.nodes.filter(n=>n.visible&&n.knowledge==='fuzzy').map(n=>n.label.replace(/\n/g,' '));
-  const un=state.nodes.filter(n=>n.visible&&n.knowledge==='unknown').map(n=>n.label.replace(/\n/g,' '));
-  if(!fz.length&&!un.length){document.getElementById('prompt-text').textContent='All visible concepts marked as "Know". Click the pills in the sidebar or double-click nodes to mark as "Fuzzy" or "Unknown".';return;}
-  const tids=new Set([...fz,...un].map(l=>state.nodes.find(n=>n.label.replace(/\n/g,' ')===l)?.id).filter(Boolean));
-  const re=state.edges.filter(e=>NM[e.from]?.visible&&NM[e.to]?.visible&&(tids.has(e.from)||tids.has(e.to)));
+  const sel=state.promptSelected;
+  const selected=state.nodes.filter(n=>n.visible&&sel.has(n.id));
+  if(!selected.length){document.getElementById('prompt-text').textContent='No concepts selected for prompt. Use the checkboxes in the sidebar to select concepts.';return;}
+  const kn=selected.filter(n=>n.knowledge==='know').map(n=>n.label.replace(/\n/g,' '));
+  const fz=selected.filter(n=>n.knowledge==='fuzzy').map(n=>n.label.replace(/\n/g,' '));
+  const un=selected.filter(n=>n.knowledge==='unknown').map(n=>n.label.replace(/\n/g,' '));
+  if(!fz.length&&!un.length){document.getElementById('prompt-text').textContent='All selected concepts marked as "Know". Click the pills in the sidebar or double-click nodes to mark as "Fuzzy" or "Unknown".';return;}
+  const selIds=new Set(selected.map(n=>n.id));
+  const tids=new Set(selected.filter(n=>n.knowledge!=='know').map(n=>n.id));
+  const re=state.edges.filter(e=>selIds.has(e.from)&&selIds.has(e.to)&&(tids.has(e.from)||tids.has(e.to)));
   const ed=re.slice(0,15).map(e=>`${NM[e.from].label.replace(/\n/g,' ')} → ${NM[e.to].label.replace(/\n/g,' ')} (${e.label})`);
+
+  // Group selected concepts by layer for section-wise display
+  const byLayer={};
+  selected.forEach(n=>{if(!byLayer[n.layer])byLayer[n.layer]=[];byLayer[n.layer].push(n);});
+  const sections=LAYERS.filter(l=>byLayer[l.id]).map(l=>`  ${l.label}: ${byLayer[l.id].map(n=>n.label.replace(/\n/g,' ')).join(', ')}`);
+
   const p=[`I'm learning about AI, Large Language Models, and Agentic AI from first principles to production.\n`];
+  p.push(`Topics I want to cover (by section):\n${sections.join('\n')}\n`);
   if(kn.length)p.push(`I already understand: ${kn.join(', ')}.\n`);
   if(fz.length)p.push(`I'm fuzzy on: ${fz.join(', ')}.\n`);
   if(un.length)p.push(`I don't understand: ${un.join(', ')}.\n`);
@@ -903,6 +968,10 @@ function updatePrompt(){
   p.push(`\nPlease explain the fuzzy and unknown concepts, focusing on the relationships above. Build on what I already know. Use concrete examples, mathematical intuition, and practical code snippets. Progress from foundational concepts upward.`);
   document.getElementById('prompt-text').textContent=p.join('\n');
 }
+
+function promptSelectAll(){state.nodes.forEach(n=>{if(n.visible)state.promptSelected.add(n.id);});renderNodeList();updatePrompt();}
+function promptSelectNone(){state.nodes.forEach(n=>state.promptSelected.delete(n.id));renderNodeList();updatePrompt();}
+function promptSelectFuzzyUnknown(){state.nodes.forEach(n=>{if(n.visible&&n.knowledge!=='know')state.promptSelected.add(n.id);else state.promptSelected.delete(n.id);});renderNodeList();updatePrompt();}
 
 function copyPrompt(){navigator.clipboard.writeText(document.getElementById('prompt-text').textContent).then(()=>{const b=document.getElementById('copy-btn');b.textContent='Copied!';setTimeout(()=>b.textContent='Copy Prompt',1500);});}
 
